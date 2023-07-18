@@ -1,12 +1,14 @@
+use crate::ApiData::ApiData;
 use reqwest::{Client, Error, Response};
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
-use scraper::{ElementRef, Html, Selector};
+use scraper::{Html, Selector};
 use std::fs::File;
 use std::io;
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct NicoVideo<'a> {
     client: Client,
     cookies_path: &'a Path,
@@ -53,7 +55,7 @@ impl<'a> NicoVideo<'a> {
     pub async fn get_video_api_data(
         self: &NicoVideo<'a>,
         video_id: &str,
-    ) -> Result<Option<String>, Error> {
+    ) -> Result<Option<ApiData>, Error> {
         let video_url = format!("https://www.nicovideo.jp/watch/{}", video_id);
         let raw_html = self.get_raw_html(video_url.as_str()).await?;
         let html = Html::parse_fragment(raw_html.as_str());
@@ -63,7 +65,7 @@ impl<'a> NicoVideo<'a> {
             let api_data = elem.attr("data-api-data").unwrap();
             println!("{:?}", api_data);
 
-            Ok(Some(api_data.to_owned()))
+            Ok(Some(serde_json::from_str(api_data).unwrap()))
         } else {
             Ok(None)
         }
@@ -93,10 +95,5 @@ impl<'a> NicoVideo<'a> {
     ) -> Result<Response, Error> {
         let ret = self.client.post(url).form(&data).send().await?;
         Ok(ret)
-    }
-
-    async fn post_raw_html(self: &NicoVideo<'a>, url: &str) -> Result<String, Error> {
-        let raw_html = self.get(url).await?.text().await?;
-        Ok(raw_html)
     }
 }

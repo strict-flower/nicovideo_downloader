@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process;
 use std::sync::Arc;
 
+mod ApiData;
 mod NicoVideo;
 
 #[tokio::main]
@@ -29,7 +30,7 @@ async fn main() -> Result<(), Error> {
             println!("Video ID must start by 'sm' or 'nm'");
             continue;
         }
-        nv.get_video_api_data(target).await?;
+        let apiData: ApiData::ApiData = nv.get_video_api_data(target).await?.unwrap();
     }
     Ok(())
 }
