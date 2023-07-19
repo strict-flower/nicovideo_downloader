@@ -1,4 +1,4 @@
-use crate::ApiData::{ApiData, Session};
+use crate::api_data::{ApiData, Session};
 use reqwest::header::{CONTENT_TYPE, ORIGIN, REFERER};
 use reqwest::{Client, Error, Response};
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
@@ -9,9 +9,8 @@ use std::io;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use tokio::task::JoinHandle;
+use tokio::time::{sleep, Duration};
 
 #[derive(Debug)]
 pub struct NicoVideo {
@@ -108,9 +107,6 @@ impl NicoVideo {
         video_id: &str,
         session: &Session,
     ) -> Result<String, Error> {
-        // let mut req: SessionRequest;
-        // req.session.client_info.player_id = session.playerId;
-        // req.session.content_auth.auth_type = session.authTypes.get("hls");
         let sreq = json!({
             "session": {
                 "recipe_id": session.recipeId,
@@ -222,7 +218,7 @@ impl NicoVideo {
                     .text()
                     .await
                     .unwrap();
-                thread::sleep(Duration::from_secs(30));
+                sleep(Duration::from_secs(30)).await;
             }
         }));
 
@@ -236,11 +232,6 @@ impl NicoVideo {
         self.heartbeat_thread = None;
     }
 
-    pub async fn download(self: &NicoVideo, master_m3u8_url: String) -> Result<(), Error> {
-        println!("{:?}", self.get_raw_html(&master_m3u8_url).await?);
-        Ok(())
-    }
-
     fn save_cookie(self: &NicoVideo) -> Result<(), io::Error> {
         let mut writer = File::create(self.cookies_path.as_path()).map(BufWriter::new)?;
         let store = self.cookies.lock().unwrap();
@@ -249,7 +240,14 @@ impl NicoVideo {
     }
 
     async fn get(self: &NicoVideo, url: &str) -> Result<Response, Error> {
-        let res = self.client.get(url).send().await?;
+        println!("[+] GET: {}", &url);
+        let res = self
+            .client
+            .get(url)
+            .header(REFERER, "https://www.nicovideo.jp")
+            .header(ORIGIN, "https://www.nicovideo.jp")
+            .send()
+            .await?;
         Ok(res)
     }
 
