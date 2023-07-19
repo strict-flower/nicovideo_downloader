@@ -31,6 +31,13 @@ async fn main() -> Result<(), Error> {
             continue;
         }
         let apiData: ApiData::ApiData = nv.get_video_api_data(target).await?.unwrap();
+        println!("[+] Title: {}", apiData.video.title);
+        let master_m3u8_url = nv
+            .create_session(target, &apiData.media.delivery.movie.session)
+            .await?;
+        println!("[+] master.m3u8 is here: {}", master_m3u8_url);
+        nv.download(master_m3u8_url).await?;
+        nv.stop_heartbeat();
     }
     Ok(())
 }

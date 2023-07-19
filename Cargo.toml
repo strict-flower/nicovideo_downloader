@@ -9,7 +9,7 @@ edition = "2021"
 async-trait = "0.1.71"
 m3u8-rs = "5.0.4"
 regex = "1.9.1"
-reqwest = {version = "0.11.18", features = ["cookies"] }
+reqwest = {version = "0.11.18", features = ["cookies", "json"] }
 reqwest_cookie_store = "0.6.0"
 scraper = "0.17.1"
 serde = { version = "1.0.171", features = ["derive"] }
