@@ -6,9 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+blockingqueue = "0.1.1"
+ffmpeg-next = "6.0.0"
+futures-util = "0.3.28"
 m3u8-rs = "5.0.4"
-reqwest = {version = "0.11.18", features = ["cookies", "json"] }
+reqwest = {version = "0.11.18", features = ["cookies", "json", "stream"] }
 reqwest_cookie_store = "0.6.0"
+sanitize-filename = "0.4.0"
 scraper = "0.17.1"
 serde = { version = "1.0.171", features = ["derive"] }
 serde_json = "1.0.103"

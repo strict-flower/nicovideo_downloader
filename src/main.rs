@@ -1,55 +1,41 @@
 use crate::api_data::ApiData;
 use crate::nicovideo::NicoVideo;
-use reqwest::header::{ORIGIN, REFERER};
-use reqwest::{Client, Error};
 use std::env;
+use std::fmt;
 use std::path::Path;
 use std::process;
 
 mod api_data;
+mod downloader;
 mod nicovideo;
 
-async fn get(client: &Client, url: &str) -> Result<String, Error> {
-    client
-        .get(url)
-        .header(REFERER, "https://www.nicovideo.jp")
-        .header(ORIGIN, "https://www.nicovideo.jp")
-        .send()
-        .await?
-        .text()
-        .await
+#[derive(Debug)]
+pub enum Error {
+    ReqwestError(reqwest::Error),
+    IOError(std::io::Error),
 }
 
-async fn do_download(master_m3u8_url: &str) -> Result<(), Error> {
-    let client = Client::new();
-    let master_m3u8 = get(&client, master_m3u8_url).await?;
-    let playlist_m3u8_path = master_m3u8
-        .split('\n')
-        .filter(|x| x.contains("playlist.m3u8"))
-        .last()
-        .unwrap();
-    let prefix = master_m3u8_url
-        .split("master.m3u8")
-        .filter(|x| x.contains("dmc.nico"))
-        .last()
-        .unwrap();
-    let playlist = m3u8_rs::parse_media_playlist_res(
-        get(&client, &format!("{}{}", prefix, playlist_m3u8_path))
-            .await?
-            .as_bytes(),
-    )
-    .unwrap();
-    let prefix_video = format!(
-        "{}/{}",
-        prefix,
-        playlist_m3u8_path.split("playlist.m3u8").next().unwrap()
-    );
-    let mut urls = Vec::new();
-    for segment in playlist.segments {
-        urls.push(format!("{}{}", prefix_video, segment.uri));
+impl fmt::Display for Error {
+    fn fmt(self: &Error, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::ReqwestError(reqwest_error) => write!(f, "{}", reqwest_error),
+            Error::IOError(io_error) => write!(f, "{}", io_error),
+        }
     }
-    println!("{:?}", urls);
-    Ok(())
+}
+
+impl std::error::Error for Error {}
+
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Self {
+        Error::ReqwestError(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IOError(err)
+    }
 }
 
 #[tokio::main]
@@ -80,7 +66,8 @@ async fn main() -> Result<(), Error> {
             .create_session(target, &api_data.media.delivery.movie.session)
             .await?;
         println!("[+] master.m3u8 is here: {}", &master_m3u8_url);
-        do_download(&master_m3u8_url).await?;
+        let outfile = format!("{}.mp4", sanitize_filename::sanitize(api_data.video.title));
+        downloader::download_master_playlist(&master_m3u8_url, &outfile).await?;
         nv.stop_heartbeat();
     }
     Ok(())

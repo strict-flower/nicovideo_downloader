@@ -1,6 +1,7 @@
 use crate::api_data::{ApiData, Session};
+use crate::Error;
 use reqwest::header::{CONTENT_TYPE, ORIGIN, REFERER};
-use reqwest::{Client, Error, Response};
+use reqwest::{Client, Response};
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
 use scraper::{Html, Selector};
 use serde_json::json;
@@ -45,7 +46,7 @@ impl HeartbeatRunner {
 }
 
 impl NicoVideo {
-    pub fn new(cookies_path: &Path) -> Result<NicoVideo, io::Error> {
+    pub fn new(cookies_path: &Path) -> Result<NicoVideo, Error> {
         let cookies = {
             if !cookies_path.exists() {
                 Ok::<CookieStore, io::Error>(CookieStore::new(None))
@@ -240,7 +241,6 @@ impl NicoVideo {
     }
 
     async fn get(self: &NicoVideo, url: &str) -> Result<Response, Error> {
-        println!("[+] GET: {}", &url);
         let res = self
             .client
             .get(url)
