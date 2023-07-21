@@ -92,33 +92,44 @@ async fn main() -> Result<(), Error> {
             .await?;
         println!("[+] master.m3u8 is here: {}", &master_m3u8_url);
         let outfile = format!("{}.mp4", sanitize_filename::sanitize(api_data.video.title));
+        if Path::new(&outfile).exists() {
+            print!("[+] '{}' is existed. overwrite? [y/N]", outfile);
+            std::io::stdout().flush()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            line.pop();
+            if line != "y" {
+                continue;
+            }
+        }
         let temp_dir = Path::new("download_temp");
         let res =
             downloader::download_master_playlist(&master_m3u8_url, temp_dir.to_str().unwrap())
                 .await?;
 
-        let demuxer_mylist = temp_dir.join("mylist.txt");
-        {
-            let mut demuxer_mylist_file = fs::File::create(&demuxer_mylist)?;
-
-            for x in &res {
-                writeln!(demuxer_mylist_file, "file '{}'", x)?;
-            }
-            demuxer_mylist_file.sync_all()?;
+        let mut input_files: Vec<String> = vec![];
+        for f in &res {
+            let t = temp_dir.join(f);
+            input_files.push(t.to_str().unwrap().to_string());
         }
+
+        let input_file_line = format!("concat:{}", input_files.as_slice().join("|"));
 
         let builder = FfmpegBuilder::new()
             .stderr(Stdio::piped())
-            .option(Parameter::KeyValue("f", "concat"))
-            .input(ffmpeg_cli::File::new(demuxer_mylist.to_str().unwrap()))
-            .output(ffmpeg_cli::File::new(&outfile));
+            .input(ffmpeg_cli::File::new(&input_file_line))
+            .output(ffmpeg_cli::File::new(&outfile).option(Parameter::KeyValue("c", "copy")));
 
         let ffmpeg = builder.run().await?;
 
         ffmpeg
             .progress
-            .for_each(|x| {
-                dbg!(x.unwrap());
+            .for_each(|_x| {
+                if let Ok(x) = _x {
+                    if let Some(t) = x.out_time {
+                        println!("[+] Processing {:?}", t);
+                    }
+                }
                 ready(())
             })
             .await;
@@ -136,7 +147,6 @@ async fn main() -> Result<(), Error> {
             let fpath = temp_dir.join(file);
             fs::remove_file(fpath)?;
         }
-        fs::remove_file(temp_dir.join("mylist.txt"))?;
         fs::remove_dir(temp_dir)?;
 
         nv.stop_heartbeat();

@@ -24,11 +24,11 @@ async fn download_ts(client: &Client, url: &str, outpath: &Path) -> Result<(), E
     let mut stream = res.bytes_stream();
 
     let mut f = fs::File::create(outpath)?;
+
     while let Some(item) = stream.next().await {
         let bytes = item?;
         f.write_all(bytes.as_ref())?;
     }
-    f.sync_all()?;
 
     Ok(())
 }
@@ -59,14 +59,15 @@ impl TSDownloadRunner {
             let filename = base_url.split('/').last().unwrap();
             let outpath = self.temp_dir.join(filename);
             println!("[{}] Start download", filename);
-            while let Err(Error::DownloadError) =
+            if let Err(Error::DownloadError) =
                 download_ts(&self.client, &url, outpath.as_path()).await
             {
                 println!("[{}] Download error: retry...", filename);
-                sleep(Duration::from_secs(2)).await;
+                self.queue_url.push(url);
+            } else {
+                println!("[{}] Done", filename);
+                self.queue_result.push(filename.to_string());
             }
-            println!("[{}] Done", filename);
-            self.queue_result.push(filename.to_string());
             sleep(Duration::from_secs(1)).await;
         }
     }

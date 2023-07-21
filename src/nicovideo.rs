@@ -97,7 +97,6 @@ impl NicoVideo {
             let elem = &selected.value();
             let api_data = elem.attr("data-api-data").unwrap();
 
-            dbg!(api_data);
             Ok(Some(serde_json::from_str(api_data).unwrap()))
         } else {
             Ok(None)
@@ -220,6 +219,7 @@ impl NicoVideo {
                     .text()
                     .await
                     .unwrap();
+                // println!("[+] Heartbeat success");
                 sleep(Duration::from_secs(30)).await;
             }
         }));
