@@ -3,10 +3,10 @@ use blockingqueue::BlockingQueue;
 use futures_util::StreamExt;
 use reqwest::header::{ORIGIN, REFERER};
 use reqwest::Client;
-use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::time::{sleep, Duration};
 
 async fn download_ts(client: &Client, url: &str, outpath: &Path) -> Result<(), Error> {
@@ -23,11 +23,11 @@ async fn download_ts(client: &Client, url: &str, outpath: &Path) -> Result<(), E
 
     let mut stream = res.bytes_stream();
 
-    let mut f = fs::File::create(outpath)?;
+    let mut f = fs::File::create(outpath).await?;
 
     while let Some(item) = stream.next().await {
         let bytes = item?;
-        f.write_all(bytes.as_ref())?;
+        f.write_all(bytes.as_ref()).await?;
     }
 
     Ok(())
@@ -58,17 +58,22 @@ impl TSDownloadRunner {
             let base_url = url.split('?').next().unwrap();
             let filename = base_url.split('/').last().unwrap();
             let outpath = self.temp_dir.join(filename);
-            println!("[{}] Start download", filename);
-            if let Err(Error::DownloadError) =
-                download_ts(&self.client, &url, outpath.as_path()).await
-            {
-                println!("[{}] Download error: retry...", filename);
-                self.queue_url.push(url);
-            } else {
-                println!("[{}] Done", filename);
+            if outpath.as_path().exists() {
+                println!("[{}] Already Downloaded", filename);
                 self.queue_result.push(filename.to_string());
+            } else {
+                println!("[{}] Start download", filename);
+                if let Err(Error::DownloadError) =
+                    download_ts(&self.client, &url, outpath.as_path()).await
+                {
+                    println!("[{}] Download error: retry...", filename);
+                    self.queue_url.push(url);
+                } else {
+                    println!("[{}] Done", filename);
+                    self.queue_result.push(filename.to_string());
+                }
             }
-            sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(3)).await;
         }
     }
 }
@@ -107,7 +112,7 @@ pub async fn download_master_playlist(
 
     let temp_dir = Path::new(dest_dir_name);
     if !Path::exists(temp_dir) {
-        fs::create_dir(temp_dir)?;
+        fs::create_dir(temp_dir).await?;
     }
 
     let queue_result = BlockingQueue::new();

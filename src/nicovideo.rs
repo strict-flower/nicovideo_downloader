@@ -170,7 +170,7 @@ impl NicoVideo {
         let ret = self
             .client
             .post(format!("{}?_format=json", &session.urls[0].url))
-            .body(json_sreq)
+            .body(json_sreq.clone())
             .header(CONTENT_TYPE, "application/json")
             .header(ORIGIN, "https://www.nicovideo.jp")
             .header(
@@ -192,7 +192,10 @@ impl NicoVideo {
                 "{}/{}?_format=json&_method=PUT",
                 &session.urls[0].url, &session_id
             ),
-            ret,
+            serde_json::to_string(&json!({
+                "session": session_data
+            }))
+            .unwrap(),
             Arc::clone(&self.client),
         );
 

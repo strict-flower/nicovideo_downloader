@@ -185,8 +185,8 @@ adstruct! {
 
     VideoThumbnail {
         url: String
-        middleUrl: String,
-        largeUrl: String,
+        middleUrl: Option<String>,
+        largeUrl: Option<String>,
         listingUrl: Option<Value>,
         nHdUrl: Option<Value>,
         player: Option<Value>,
