@@ -89,6 +89,8 @@ impl NicoVideoDownloader {
         temp_dir: &Path,
         extension: &str,
     ) -> Result<(), Error> {
+        let newline: &str = if !crate::is_debug() { "\r" } else { "\n" };
+
         let mut key_bytes: Vec<u8> = vec![0; 16];
         let mut iv_bytes: Vec<u8> = vec![0; 16];
         for segment in &mut playlist.segments {
@@ -108,7 +110,6 @@ impl NicoVideoDownloader {
         for segment in &mut playlist.segments {
             sleep(Duration::from_millis(250)).await;
             if let Some(map) = &segment.map {
-                println!("[+] Downloading map...");
                 let map_url = &map.uri;
                 let map_file = Path::new(url_to_filename(map_url, extension));
                 self.download_into_file(map_url, temp_dir.join(map_file).as_path())
@@ -117,13 +118,15 @@ impl NicoVideoDownloader {
             }
 
             let filename = Path::new(url_to_filename(&segment.uri, extension));
-            println!("[+] {}", filename.to_str().unwrap());
+            print!("[+] {}{}", filename.to_str().unwrap(), newline);
+            std::io::stdout().flush().unwrap();
 
             let filepath = temp_dir.join(filename);
             self.download_and_decrypt(&segment.uri, filepath.as_path(), &key_bytes, &iv_bytes)
                 .await?;
             segment.uri = filename.to_str().unwrap().to_string();
         }
+        println!();
 
         Ok(())
     }

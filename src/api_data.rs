@@ -136,13 +136,6 @@ adstruct! {
         urls: Vec<SessionURL>
     }
 
-    MediaDelivaryMovie {
-        contentId: String,
-        audios: Vec<MovieAudio>,
-        videos: Vec<MovieVideo>,
-        session: Session,
-    }
-
     StoryBoardImage {
         id: String
     }
@@ -152,14 +145,6 @@ adstruct! {
         images: Vec<StoryBoardImage>,
         session: Session,
 
-    }
-
-    MediaDelivary {
-        recipeId: String,
-        encryption: Option<Value>,
-        movie: MediaDelivaryMovie,
-        storyboard: StoryBoard,
-        trackingId: String,
     }
 
     DomandVideo {
@@ -205,9 +190,9 @@ adstruct! {
     }
 
     VideoOwner {
-        iconUrl: String,
+        iconUrl: Option<String>,
         id: String,
-        name: String,
+        name: Option<String>,
         ownerType: String,
         r#type: String,
         visibility: String

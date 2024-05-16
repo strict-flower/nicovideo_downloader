@@ -93,6 +93,8 @@ async fn main() -> Result<(), Error> {
     }
     println!("[+] Login OK");
 
+    let newline: &str = if !is_debug() { "\r" } else { "\n" };
+
     for target in args {
         if !target.starts_with("sm") && !target.starts_with("nm") {
             println!("Video ID must start by 'sm' or 'nm'");
@@ -104,7 +106,9 @@ async fn main() -> Result<(), Error> {
         let api_data: ApiData = nv.get_video_api_data(&target).await?.unwrap();
         println!("[+] Title: {}", api_data.video.title);
         let m3u8_url = nv.update_hls_cookie(&api_data, &target).await?;
-        println!("[+] master playlist is here: {}", &m3u8_url);
+        if is_debug() {
+            println!("[+] master playlist is here: {}", &m3u8_url);
+        }
         let outfile = format!("{}.mp4", sanitize_filename::sanitize(api_data.video.title));
         if Path::new(&outfile).exists() {
             print!("[+] '{}' is existed. overwrite? [y/N]", outfile);
@@ -132,9 +136,7 @@ async fn main() -> Result<(), Error> {
             .option(FFParam::KeyValue("protocol_whitelist", "file"))
             .input(ffmpeg_cli::File::new(input_path.to_str().unwrap()))
             .output(
-                ffmpeg_cli::File::new(&outfile)
-                    .option(FFParam::KeyValue("g", "5"))
-                    .option(FFParam::KeyValue("tune", "zerolatency")),
+                ffmpeg_cli::File::new(&outfile).option(FFParam::KeyValue("g", "15")), // .option(FFParam::KeyValue("tune", "zerolatency")),
             );
 
         let ffmpeg = builder.run().await?;
@@ -144,23 +146,30 @@ async fn main() -> Result<(), Error> {
             .for_each(|_x| {
                 if let Ok(x) = _x {
                     if let Some(t) = x.out_time {
-                        println!("[+] Processing {:?}", t);
+                        print!("\x1b[2K\r");
+                        std::io::stdout().flush().unwrap();
+                        print!("[+] Processing {:?}{}", t, newline);
+                        std::io::stdout().flush().unwrap();
                     }
                 }
                 ready(())
             })
             .await;
 
-        let output = ffmpeg.process.wait_with_output()?;
-
-        println!(
-            "{}\nstderr:\n{}",
-            output.status,
-            std::str::from_utf8(&output.stderr).unwrap()
-        );
+        println!();
+        if is_debug() {
+            let output = ffmpeg.process.wait_with_output()?;
+            println!(
+                "{}\nstderr:\n{}",
+                output.status,
+                std::str::from_utf8(&output.stderr).unwrap()
+            );
+        }
 
         // cleanup
-        fs::remove_dir_all(temp_dir)?;
+        if !is_debug() {
+            fs::remove_dir_all(temp_dir)?;
+        }
     }
     Ok(())
 }
