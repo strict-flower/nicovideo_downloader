@@ -27,7 +27,7 @@ pub struct SeriesVideo {
     pub isPaymentRequired: bool,
     pub latestCommentSummary: String,
     pub owner: VideoOwner,
-    pub playbackPosition: Option<i32>,
+    pub playbackPosition: Option<f64>,
     pub registeredAt: String,
     pub requireSensitiveMasking: bool,
     pub shortDescription: String,
@@ -162,8 +162,38 @@ adstruct! {
         trackingId: String,
     }
 
+    DomandVideo {
+        id: String,
+        isAvailable: bool,
+        label: String,
+        bitRate: i32,
+        width: i32,
+        height: i32,
+        qualityLevel: i32,
+        recommendedHighestAudioQualityLevel: i32
+    }
+
+    DomandAudio {
+        id: String,
+        isAvailable: bool,
+        bitRate: i32,
+        samplingRate: i32,
+        integratedLoudness: f64,
+        truePeak: f64,
+        qualityLevel: i32,
+        loudnessCollection: Vec<TypewiseLoudness>,
+    }
+
+    Domand {
+        videos: Vec<DomandVideo>,
+        audios: Vec<DomandAudio>,
+        isStoryboardAvailable: bool,
+        accessRightKey: String
+    }
+
     Media {
-        delivery: MediaDelivary,
+        domand: Domand,
+        delivery: Value,
         deliveryLegacy: Option<Value>
     }
 
@@ -225,7 +255,7 @@ adstruct! {
         ads: Option<Value>,
         category: Option<Value>,
         channel: Option<Value>,
-        client: Value,
+        client: Client,
         comment: Value,
         community: Option<Value>,
         easyComment: Value,

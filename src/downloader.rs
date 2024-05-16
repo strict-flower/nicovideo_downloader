@@ -1,154 +1,130 @@
-use crate::Error;
-use blockingqueue::BlockingQueue;
+use crate::{Error, UA_STRING};
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use futures_util::StreamExt;
-use reqwest::header::{ORIGIN, REFERER};
-use reqwest::Client;
-use std::path::{Path, PathBuf};
+use reqwest::header::{ORIGIN, REFERER, USER_AGENT};
+use reqwest::{Client, Response};
+use std::io::prelude::*;
+use std::path::Path;
 use std::sync::Arc;
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use tokio::time::{sleep, Duration};
 
-async fn download_ts(client: &Client, url: &str, outpath: &Path) -> Result<(), Error> {
-    let res = client
-        .get(url)
-        .header(REFERER, "https://www.nicovideo.jp")
-        .header(ORIGIN, "https://www.nicovideo.jp")
-        .send()
-        .await?;
-
-    if res.content_length().unwrap() < 100 {
-        return Err(Error::DownloadError);
-    }
-
-    let mut stream = res.bytes_stream();
-
-    let mut f = fs::File::create(outpath).await?;
-
-    while let Some(item) = stream.next().await {
-        let bytes = item?;
-        f.write_all(bytes.as_ref()).await?;
-    }
-
-    Ok(())
-}
-
-async fn get(client: &Client, url: &str) -> Result<String, Error> {
-    let response = client
-        .get(url)
-        .header(REFERER, "https://www.nicovideo.jp")
-        .header(ORIGIN, "https://www.nicovideo.jp")
-        .send()
-        .await?;
-    let ret = response.text().await?;
-    Ok(ret)
-}
-
-struct TSDownloadRunner {
+pub struct NicoVideoDownloader {
     client: Arc<Client>,
-    queue_result: BlockingQueue<String>,
-    queue_url: BlockingQueue<String>,
-    temp_dir: PathBuf,
 }
 
-impl TSDownloadRunner {
-    async fn run(self) -> Result<(), Error> {
-        loop {
-            let url = self.queue_url.pop();
-            let base_url = url.split('?').next().unwrap();
-            let filename = base_url.split('/').last().unwrap();
-            let outpath = self.temp_dir.join(filename);
-            if outpath.as_path().exists() {
-                println!("[{}] Already Downloaded", filename);
-                self.queue_result.push(filename.to_string());
-            } else {
-                println!("[{}] Start download", filename);
-                if let Err(Error::DownloadError) =
-                    download_ts(&self.client, &url, outpath.as_path()).await
-                {
-                    println!("[{}] Download error: retry...", filename);
-                    self.queue_url.push(url);
-                } else {
-                    println!("[{}] Done", filename);
-                    self.queue_result.push(filename.to_string());
-                }
-            }
-            sleep(Duration::from_secs(3)).await;
+fn url_to_filename<'a>(url: &'a str, extension: &'a str) -> &'a str {
+    let path = url.split_once('?').unwrap().0;
+    path.split('/')
+        .filter(|x| x.ends_with(&extension))
+        .last()
+        .unwrap()
+}
+
+impl NicoVideoDownloader {
+    pub fn new(client: Arc<Client>) -> NicoVideoDownloader {
+        Self { client }
+    }
+
+    pub async fn download_m3u8(&self, m3u8_url: &str) -> Result<String, Error> {
+        Ok(self.get(m3u8_url).await?.text().await?.to_string())
+    }
+
+    pub async fn download_raw(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let mut stream = self.get(url).await?.bytes_stream();
+
+        let mut v: Vec<u8> = vec![];
+
+        while let Some(item) = stream.next().await {
+            v.extend_from_slice(&item.unwrap());
         }
-    }
-}
 
-pub async fn download_master_playlist(
-    master_m3u8_url: &str,
-    dest_dir_name: &str,
-) -> Result<Vec<String>, Error> {
-    let client = Arc::new(Client::new());
-    let master_m3u8 = get(&client, master_m3u8_url).await?;
-    let playlist_m3u8_path = master_m3u8
-        .split('\n')
-        .filter(|x| x.contains("playlist.m3u8"))
-        .last()
-        .unwrap();
-    let prefix = master_m3u8_url
-        .split("master.m3u8")
-        .filter(|x| x.contains("dmc.nico"))
-        .last()
-        .unwrap();
-    let playlist = m3u8_rs::parse_media_playlist_res(
-        get(&client, &format!("{}{}", prefix, playlist_m3u8_path))
-            .await?
-            .as_bytes(),
-    )
-    .unwrap();
-    let prefix_video = format!(
-        "{}/{}",
-        prefix,
-        playlist_m3u8_path.split("playlist.m3u8").next().unwrap()
-    );
-    let mut urls = Vec::new();
-    for segment in playlist.segments {
-        urls.push(format!("{}{}", prefix_video, segment.uri));
+        Ok(v)
     }
 
-    let temp_dir = Path::new(dest_dir_name);
-    if !Path::exists(temp_dir) {
-        fs::create_dir(temp_dir).await?;
+    async fn download_and_decrypt(
+        &self,
+        url: &str,
+        file: &Path,
+        key: &[u8],
+        iv: &[u8],
+    ) -> Result<(), Error> {
+        type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+        let ciphertext = self.download_raw(url).await?;
+        let plaintext = Aes128CbcDec::new(key.into(), iv.into())
+            .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext)
+            .unwrap();
+
+        let mut f = std::fs::File::create(file)?;
+        f.write_all(&plaintext)?;
+
+        Ok(())
     }
 
-    let queue_result = BlockingQueue::new();
-    let queue_url = BlockingQueue::new();
-    let mut threads = vec![];
-    let mut downloaded = vec![];
+    async fn download_into_file(&self, url: &str, file: &Path) -> Result<(), Error> {
+        let mut f = std::fs::File::create(file)?;
+        let mut stream = self.get(url).await?.bytes_stream();
 
-    for i in 0..4 {
-        let runner = TSDownloadRunner {
-            queue_result: queue_result.clone(),
-            queue_url: queue_url.clone(),
-            client: client.clone(),
-            temp_dir: temp_dir.to_path_buf(),
-        };
-        threads.push(tokio::spawn(async move {
-            sleep(Duration::from_secs(i)).await;
-            runner.run().await
-        }));
+        while let Some(item) = stream.next().await {
+            f.write_all(&item.unwrap())?;
+        }
+
+        Ok(())
     }
 
-    for url in &urls {
-        queue_url.push(url.clone());
+    async fn get(&self, url: &str) -> Result<Response, Error> {
+        let res = self
+            .client
+            .get(url)
+            .header(REFERER, "https://www.nicovideo.jp")
+            .header(ORIGIN, "https://www.nicovideo.jp")
+            .header(USER_AGENT, UA_STRING)
+            .send()
+            .await?;
+        Ok(res)
     }
 
-    while downloaded.len() < urls.len() {
-        let v = queue_result.pop();
-        downloaded.push(v);
+    pub async fn download_media_playlist(
+        &self,
+        playlist: &mut m3u8_rs::MediaPlaylist,
+        temp_dir: &Path,
+        extension: &str,
+    ) -> Result<(), Error> {
+        let mut key_bytes: Vec<u8> = vec![0; 16];
+        let mut iv_bytes: Vec<u8> = vec![0; 16];
+        for segment in &mut playlist.segments {
+            if let Some(key) = &segment.key {
+                println!("[+] Downloading key...");
+                let key_url = key.uri.as_ref().unwrap();
+                key_bytes = self.download_raw(key_url).await?;
+                // strip leading "0x"
+                let _ = hex::decode_to_slice(&key.iv.as_ref().unwrap()[2..], &mut iv_bytes);
+                segment.key = None;
+                break;
+            }
+        }
+        println!("[+] Key = {:?}", key_bytes);
+        println!("[+] IV = {:?}", iv_bytes);
+
+        for segment in &mut playlist.segments {
+            sleep(Duration::from_millis(250)).await;
+            if let Some(map) = &segment.map {
+                println!("[+] Downloading map...");
+                let map_url = &map.uri;
+                let map_file = Path::new(url_to_filename(map_url, extension));
+                self.download_into_file(map_url, temp_dir.join(map_file).as_path())
+                    .await?;
+                segment.map.as_mut().unwrap().uri = map_file.to_str().unwrap().to_string();
+            }
+
+            let filename = Path::new(url_to_filename(&segment.uri, extension));
+            println!("[+] {}", filename.to_str().unwrap());
+
+            let filepath = temp_dir.join(filename);
+            self.download_and_decrypt(&segment.uri, filepath.as_path(), &key_bytes, &iv_bytes)
+                .await?;
+            segment.uri = filename.to_str().unwrap().to_string();
+        }
+
+        Ok(())
     }
-
-    for thread in threads {
-        thread.abort();
-    }
-
-    downloaded.sort_by_key(|x| x.split('.').next().unwrap().parse::<i32>().unwrap());
-
-    println!("[+] Downloaded: {:?}", downloaded);
-
-    Ok(downloaded)
 }

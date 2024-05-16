@@ -1,6 +1,6 @@
-use crate::api_data::{ApiData, Session};
-use crate::Error;
-use reqwest::header::{CONTENT_TYPE, ORIGIN, REFERER};
+use crate::api_data::ApiData;
+use crate::{Error, NicoVideoDownloader, UA_STRING};
+use reqwest::header::{CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT};
 use reqwest::{Client, Response};
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
 use scraper::{Html, Selector};
@@ -10,39 +10,12 @@ use std::io;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
 
 #[derive(Debug)]
 pub struct NicoVideo {
     client: Arc<Client>,
     cookies_path: PathBuf,
     cookies: Arc<CookieStoreMutex>,
-    heartbeat_thread: Option<JoinHandle<()>>,
-}
-
-#[derive(Debug)]
-struct HeartbeatRunner {
-    video_id: String,
-    url: String,
-    session_string: String,
-    client: Arc<Client>,
-}
-
-impl HeartbeatRunner {
-    pub fn new(
-        video_id: String,
-        url: String,
-        session_string: String,
-        client: Arc<Client>,
-    ) -> HeartbeatRunner {
-        HeartbeatRunner {
-            video_id,
-            url,
-            session_string,
-            client,
-        }
-    }
 }
 
 impl NicoVideo {
@@ -68,7 +41,6 @@ impl NicoVideo {
             ),
             cookies_path: cookies_path.to_owned(),
             cookies: cookies_arc,
-            heartbeat_thread: None,
         })
     }
 
@@ -96,6 +68,9 @@ impl NicoVideo {
         if let Some(selected) = html.select(&selector).next() {
             let elem = &selected.value();
             let api_data = elem.attr("data-api-data").unwrap();
+            if crate::is_debug() {
+                dbg!(&api_data);
+            }
 
             Ok(Some(serde_json::from_str(api_data).unwrap()))
         } else {
@@ -103,138 +78,53 @@ impl NicoVideo {
         }
     }
 
-    pub async fn create_session(
-        self: &mut NicoVideo,
+    pub async fn update_hls_cookie(
+        &self,
+        api_data: &ApiData,
         video_id: &str,
-        session: &Session,
     ) -> Result<String, Error> {
-        let sreq = json!({
-            "session": {
-                "recipe_id": session.recipeId,
-                "content_id": session.contentId,
-                "content_type": "movie",
-                "content_src_id_sets": [
-                    {
-                        "content_src_ids": [
-                            {
-                                "src_id_to_mux": {
-                                    "video_src_ids": session.videos,
-                                    "audio_src_ids": session.audios
-                                }
-                            }
-                        ]
-                    }
-                ],
-                "timing_constraint": "unlimited",
-                "keep_method": {
-                    "heartbeat": {
-                        "lifetime": session.heartbeatLifetime
-                    }
-                },
-                "protocol": {
-                    "name": "http",
-                    "parameters": {
-                        "http_parameters": {
-                            "parameters": {
-                                "hls_parameters": {
-                                    "use_well_known_port": "yes",
-                                    "use_ssl": "yes",
-                                    "transfer_preset": session.transferPresets[0],
-                                    "segment_duration": 6000
-                                }
-                            }
-                        }
-                    }
-                },
-                "content_uri": "",
-                "session_operation_auth": {
-                    "session_operation_auth_by_signature": {
-                        "token": session.token,
-                        "signature": session.signature
-                    }
-                },
-                "client_info": {
-                    "player_id": session.playerId
-                },
-                "content_auth": {
-                    "auth_type": session.authTypes.get("hls"),
-                    "content_key_timeout": session.contentKeyTimeout,
-                    "service_id": "nicovideo",
-                    "service_user_id": session.serviceUserId
-                },
-                "priority": session.priority,
-            }
-        });
-        let json_sreq = serde_json::to_string(&sreq).unwrap();
-
-        let ret = self
+        let domand = &api_data.media.domand;
+        let action_track_id = &api_data.client.watchTrackId;
+        let url = format!(
+            "https://nvapi.nicovideo.jp/v1/watch/{}/access-rights/hls?actionTrackId={}",
+            video_id, action_track_id
+        );
+        let id_video_domand = {
+            let mut videos = Vec::new();
+            videos.extend(&domand.videos);
+            videos.sort_by_key(|x| x.qualityLevel);
+            &videos.iter().filter(|x| x.isAvailable).last().unwrap().id
+        };
+        let id_audio_domand = {
+            let mut audios = Vec::new();
+            audios.extend(&domand.audios);
+            audios.sort_by_key(|x| x.qualityLevel);
+            &audios.iter().filter(|x| x.isAvailable).last().unwrap().id
+        };
+        let req_json = json! {{
+            "outputs": [
+            [id_video_domand, id_audio_domand]
+            ]
+        }};
+        let req_json_str = serde_json::to_string(&req_json).unwrap();
+        let res = self
             .client
-            .post(format!("{}?_format=json", &session.urls[0].url))
-            .body(json_sreq.clone())
-            .header(CONTENT_TYPE, "application/json")
+            .post(url)
+            .header(REFERER, "https://www.nicovideo.jp")
             .header(ORIGIN, "https://www.nicovideo.jp")
-            .header(
-                REFERER,
-                format!("https://www.nicovideo.jp/watch/{}", video_id),
-            )
+            .header(USER_AGENT, UA_STRING)
+            .header(CONTENT_TYPE, "application/json")
+            .header("X-Request-With", "https://www.nicovideo.jp")
+            .header("X-Access-Right-Key", &domand.accessRightKey)
+            .header("X-Frontend-Id", "6")
+            .header("X-Frontend-Version", "0")
+            .body(req_json_str)
             .send()
             .await?
             .text()
             .await?;
-        let ret_json: serde_json::Value = serde_json::from_str(&ret).unwrap();
-        let session_data = ret_json.get("data").unwrap().get("session").unwrap();
-        let content_uri = session_data.get("content_uri").unwrap().as_str().unwrap();
-        let session_id = session_data.get("id").unwrap().as_str().unwrap();
-
-        let heartbeat_runner = HeartbeatRunner::new(
-            video_id.to_owned().clone(),
-            format!(
-                "{}/{}?_format=json&_method=PUT",
-                &session.urls[0].url, &session_id
-            ),
-            serde_json::to_string(&json!({
-                "session": session_data
-            }))
-            .unwrap(),
-            Arc::clone(&self.client),
-        );
-
-        self.heartbeat_thread = Some(tokio::spawn(async move {
-            loop {
-                let session =
-                    reqwest::Body::from(heartbeat_runner.session_string.as_bytes().to_owned());
-                heartbeat_runner
-                    .client
-                    .post(&heartbeat_runner.url)
-                    .body(session)
-                    .header(CONTENT_TYPE, "application/json")
-                    .header(ORIGIN, "https://www.nicovideo.jp")
-                    .header(
-                        REFERER,
-                        format!(
-                            "https://www.nicovideo.jp/watch/{}",
-                            &heartbeat_runner.video_id
-                        ),
-                    )
-                    .send()
-                    .await
-                    .unwrap()
-                    .text()
-                    .await
-                    .unwrap();
-                // println!("[+] Heartbeat success");
-                sleep(Duration::from_secs(30)).await;
-            }
-        }));
-
-        Ok(content_uri.to_owned())
-    }
-
-    pub fn stop_heartbeat(self: &mut NicoVideo) {
-        if let Some(handle) = &self.heartbeat_thread {
-            handle.abort();
-        }
-        self.heartbeat_thread = None;
+        let res: serde_json::Value = serde_json::from_str(&res)?;
+        Ok(res["data"]["contentUrl"].as_str().unwrap().to_string())
     }
 
     fn save_cookie(self: &NicoVideo) -> Result<(), io::Error> {
@@ -250,6 +140,7 @@ impl NicoVideo {
             .get(url)
             .header(REFERER, "https://www.nicovideo.jp")
             .header(ORIGIN, "https://www.nicovideo.jp")
+            .header(USER_AGENT, UA_STRING)
             .send()
             .await?;
         Ok(res)
@@ -265,7 +156,17 @@ impl NicoVideo {
         url: &str,
         data: &Vec<(&str, &str)>,
     ) -> Result<Response, Error> {
-        let ret = self.client.post(url).form(&data).send().await?;
+        let ret = self
+            .client
+            .post(url)
+            .header(USER_AGENT, UA_STRING)
+            .form(&data)
+            .send()
+            .await?;
         Ok(ret)
+    }
+
+    pub fn get_downloader(&self) -> NicoVideoDownloader {
+        NicoVideoDownloader::new(self.client.clone())
     }
 }
