@@ -25,11 +25,11 @@ impl NicoVideoDownloader {
         Self { client }
     }
 
-    pub async fn download_m3u8(&self, m3u8_url: &str) -> Result<String, Error> {
+    async fn download_m3u8(&self, m3u8_url: &str) -> Result<String, Error> {
         Ok(self.get(m3u8_url).await?.text().await?.to_string())
     }
 
-    pub async fn download_raw(&self, url: &str) -> Result<Vec<u8>, Error> {
+    async fn download_raw(&self, url: &str) -> Result<Vec<u8>, Error> {
         let mut stream = self.get(url).await?.bytes_stream();
 
         let mut v: Vec<u8> = vec![];
@@ -83,7 +83,7 @@ impl NicoVideoDownloader {
         Ok(res)
     }
 
-    pub async fn download_media_playlist(
+    async fn download_media_playlist(
         &self,
         playlist: &mut m3u8_rs::MediaPlaylist,
         temp_dir: &Path,
@@ -95,7 +95,6 @@ impl NicoVideoDownloader {
         let mut iv_bytes: Vec<u8> = vec![0; 16];
         for segment in &mut playlist.segments {
             if let Some(key) = &segment.key {
-                println!("[+] Downloading key...");
                 let key_url = key.uri.as_ref().unwrap();
                 key_bytes = self.download_raw(key_url).await?;
                 // strip leading "0x"
@@ -104,8 +103,8 @@ impl NicoVideoDownloader {
                 break;
             }
         }
-        println!("[+] Key = {:?}", key_bytes);
-        println!("[+] IV = {:?}", iv_bytes);
+        println!("Key = {:?}", key_bytes);
+        println!("IV = {:?}", iv_bytes);
 
         for segment in &mut playlist.segments {
             sleep(Duration::from_millis(250)).await;
@@ -118,7 +117,7 @@ impl NicoVideoDownloader {
             }
 
             let filename = Path::new(url_to_filename(&segment.uri, extension));
-            print!("[+] {}{}", filename.to_str().unwrap(), newline);
+            print!("{}{}", filename.to_str().unwrap(), newline);
             std::io::stdout().flush().unwrap();
 
             let filepath = temp_dir.join(filename);
@@ -129,5 +128,62 @@ impl NicoVideoDownloader {
         println!();
 
         Ok(())
+    }
+
+    pub async fn download_playlist(
+        &self,
+        m3u8_url: String,
+        temp_dir: &Path,
+    ) -> Result<String, Error> {
+        let master_m3u8 = self.download_m3u8(&m3u8_url).await?;
+        let mut master_m3u8 = m3u8_rs::parse_master_playlist(&master_m3u8.into_bytes())
+            .unwrap()
+            .1;
+        let video_info = &master_m3u8.variants[0];
+        let audio_info = &master_m3u8.alternatives[0];
+        let video_resolution = video_info.resolution.unwrap();
+        let codec = video_info.codecs.as_ref().unwrap();
+        println!(
+            "Video: {} ({}x{})",
+            codec, video_resolution.width, video_resolution.height,
+        );
+        println!("Audio: {}", audio_info.group_id);
+        let mut video_m3u8 =
+            m3u8_rs::parse_media_playlist(self.download_m3u8(&video_info.uri).await?.as_bytes())
+                .unwrap()
+                .1;
+        let mut audio_m3u8 = m3u8_rs::parse_media_playlist(
+            self.download_m3u8(audio_info.uri.as_ref().unwrap())
+                .await?
+                .as_bytes(),
+        )
+        .unwrap()
+        .1;
+
+        println!("\n[+] Video");
+        self.download_media_playlist(&mut video_m3u8, temp_dir, "cmfv")
+            .await?;
+
+        println!("\n[+] Audio");
+        self.download_media_playlist(&mut audio_m3u8, temp_dir, "cmfa")
+            .await?;
+
+        {
+            let mut f = std::fs::File::create(temp_dir.join("video.m3u8"))?;
+            video_m3u8.write_to(&mut f)?;
+        }
+        {
+            let mut f = std::fs::File::create(temp_dir.join("audio.m3u8"))?;
+            audio_m3u8.write_to(&mut f)?;
+        }
+
+        master_m3u8.variants[0].uri = "video.m3u8".to_string();
+        master_m3u8.alternatives[0].uri = Some("audio.m3u8".to_string());
+        {
+            let mut f = std::fs::File::create(temp_dir.join("master.m3u8"))?;
+            master_m3u8.write_to(&mut f)?;
+        }
+
+        Ok("master.m3u8".to_string())
     }
 }
