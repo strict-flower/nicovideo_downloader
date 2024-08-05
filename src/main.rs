@@ -73,6 +73,7 @@ async fn main() -> Result<(), Error> {
         return Ok(());
     }
 
+    /*
     if !nv.is_login().await? {
         println!("[+] Need login");
         nv.login(&username, &password).await?;
@@ -82,6 +83,7 @@ async fn main() -> Result<(), Error> {
         }
     }
     println!("[+] Login OK");
+    */
 
     for target in args {
         if !target.starts_with("sm") && !target.starts_with("nm") {
@@ -90,7 +92,8 @@ async fn main() -> Result<(), Error> {
         }
 
         println!("\n[+] {}", target);
-        download_video(&nv, target).await?;
+        download_video_temp(&nv, target).await?;
+        // download_video(&nv, target).await?;
     }
     Ok(())
 }
@@ -104,7 +107,7 @@ async fn download_video(nv: &NicoVideo, target: String) -> Result<(), Error> {
         println!("master playlist is here: {}", &m3u8_url);
     }
 
-    let outfile = format!("{}.mp4", sanitize_filename::sanitize(api_data.video.title));
+    let outfile = format!("{}.mp4", sanitize_filename::sanitize(&api_data.video.title));
     let outfile = Path::new(&outfile);
     if outfile.exists() {
         print!(
@@ -133,6 +136,72 @@ async fn download_video(nv: &NicoVideo, target: String) -> Result<(), Error> {
 
     convert_video(input_path, outfile).await?;
 
+    // write-out metadata
+    let meta_dir = Path::new("metadata");
+    if !meta_dir.exists() {
+        fs::create_dir(meta_dir)?;
+    }
+
+    let api_data_string = serde_json::to_string_pretty(&api_data)?;
+    let mut mdf = fs::File::create(format!("metadata/{}.json", target))?;
+    mdf.write_all(api_data_string.as_bytes())?;
+
+    // cleanup
+    if !is_debug() {
+        fs::remove_dir_all(temp_dir)?;
+    }
+
+    Ok(())
+}
+
+async fn download_video_temp(nv: &NicoVideo, target: String) -> Result<(), Error> {
+    let api_data: ApiData = nv.get_video_api_data_temp(&target).await?.unwrap();
+    println!("[+] Title: {}", api_data.video.title);
+
+    let m3u8_url = nv.update_hls_cookie_temp(&api_data, &target).await?;
+    if is_debug() {
+        println!("master playlist is here: {}", &m3u8_url);
+    }
+
+    let outfile = format!("{}.mp4", sanitize_filename::sanitize(&api_data.video.title));
+    let outfile = Path::new(&outfile);
+    if outfile.exists() {
+        print!(
+            "[?] '{}' is existed. overwrite? [y/N]",
+            outfile.to_str().unwrap()
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        line.pop();
+        if line != "y" {
+            return Ok(());
+        }
+    }
+    let temp_dir_name = format!("download_temp_{}", target);
+    let temp_dir = Path::new(&temp_dir_name);
+    if !temp_dir.exists() {
+        fs::create_dir(temp_dir)?;
+    }
+
+    let downloader = nv.get_downloader();
+    let master_playlist_filename = downloader.download_playlist(m3u8_url, temp_dir).await?;
+
+    println!("\n[+] Transcode HLS stream to mp4 video");
+    let input_path = &temp_dir.join(master_playlist_filename);
+
+    convert_video(input_path, outfile).await?;
+
+    // write-out metadata
+    let meta_dir = Path::new("metadata");
+    if !meta_dir.exists() {
+        fs::create_dir(meta_dir)?;
+    }
+
+    let api_data_string = serde_json::to_string_pretty(&api_data)?;
+    let mut mdf = fs::File::create(format!("metadata/{}.json", target))?;
+    mdf.write_all(api_data_string.as_bytes())?;
+
     // cleanup
     if !is_debug() {
         fs::remove_dir_all(temp_dir)?;
@@ -144,7 +213,7 @@ async fn download_video(nv: &NicoVideo, target: String) -> Result<(), Error> {
 async fn convert_video(input_path: &Path, outfile: &Path) -> Result<(), Error> {
     let newline: &str = if !is_debug() { "\r" } else { "\n" };
     let builder = FfmpegBuilder::new()
-        .stderr(Stdio::piped())
+        // .stderr(Stdio::piped())
         .option(FFParam::KeyValue("allowed_extensions", "ALL"))
         .option(FFParam::KeyValue("protocol_whitelist", "file"))
         .input(ffmpeg_cli::File::new(input_path.to_str().unwrap()))

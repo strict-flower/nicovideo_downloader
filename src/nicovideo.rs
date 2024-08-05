@@ -78,6 +78,28 @@ impl NicoVideo {
         }
     }
 
+    pub async fn get_video_api_data_temp(
+        self: &NicoVideo,
+        video_id: &str,
+    ) -> Result<Option<ApiData>, Error> {
+        let video_url = format!(
+            "https://www.nicovideo.jp/api/watch/tmp/{}?_frontendId=6&_frontendVersion=0.0.0",
+            video_id
+        );
+        let raw: serde_json::Value = self.get(video_url.as_str()).await?.json().await?;
+        let status = &raw["meta"]["status"];
+        if status == 200 {
+            let api_data = raw["data"].clone();
+            if crate::is_debug() {
+                dbg!(&api_data);
+            }
+
+            Ok(Some(serde_json::from_value(api_data)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn update_hls_cookie(
         &self,
         api_data: &ApiData,
@@ -124,6 +146,57 @@ impl NicoVideo {
             .text()
             .await?;
         let res: serde_json::Value = serde_json::from_str(&res)?;
+        Ok(res["data"]["contentUrl"].as_str().unwrap().to_string())
+    }
+
+    pub async fn update_hls_cookie_temp(
+        &self,
+        api_data: &ApiData,
+        video_id: &str,
+    ) -> Result<String, Error> {
+        let domand = &api_data.media.domand;
+        let action_track_id = &api_data.client.watchTrackId;
+        let url = format!(
+            "https://nvapi.nicovideo.jp/v1/tmp/watch/{}/access-rights/hls?actionTrackId={}&_frontendId=6&_frontendVersion=0.0.0",
+            video_id, action_track_id
+        );
+        let id_video_domand = {
+            let mut videos = Vec::new();
+            videos.extend(&domand.videos);
+            videos.sort_by_key(|x| x.qualityLevel);
+            &videos.iter().filter(|x| x.isAvailable).last().unwrap().id
+        };
+        let id_audio_domand = {
+            let mut audios = Vec::new();
+            audios.extend(&domand.audios);
+            audios.sort_by_key(|x| x.qualityLevel);
+            &audios.iter().filter(|x| x.isAvailable).last().unwrap().id
+        };
+        let req_json = json! {{
+            "outputs": [
+            [id_video_domand, id_audio_domand]
+            ]
+        }};
+        let req_json_str = serde_json::to_string(&req_json).unwrap();
+        let res: serde_json::Value = self
+            .client
+            .post(url)
+            .header(REFERER, "https://www.nicovideo.jp")
+            .header(ORIGIN, "https://www.nicovideo.jp")
+            .header(USER_AGENT, UA_STRING)
+            .header(CONTENT_TYPE, "application/json")
+            .header("X-Request-With", "https://www.nicovideo.jp")
+            .header("X-Access-Right-Key", &domand.accessRightKey)
+            .body(req_json_str)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if crate::is_debug() {
+            dbg!(&res);
+        }
+
         Ok(res["data"]["contentUrl"].as_str().unwrap().to_string())
     }
 
