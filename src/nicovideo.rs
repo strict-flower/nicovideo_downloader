@@ -45,9 +45,12 @@ impl NicoVideo {
     }
 
     pub async fn login(self: &NicoVideo, username: &str, password: &str) -> Result<(), Error> {
-        let form_data = vec![("mail", username), ("password", password)];
-        self.post("https://secure.nicovideo.jp/secure/login", &form_data)
-            .await?;
+        let form_data = vec![("mail_tel", username), ("password", password)];
+        self.post(
+            "https://account.nicovideo.jp/login/redirector?next_url=%2F",
+            &form_data,
+        )
+        .await?;
         self.save_cookie().unwrap();
         Ok(())
     }
@@ -64,40 +67,59 @@ impl NicoVideo {
         let video_url = format!("https://www.nicovideo.jp/watch/{}", video_id);
         let raw_html = self.get_raw_html(video_url.as_str()).await?;
         let html = Html::parse_fragment(raw_html.as_str());
-        let selector = Selector::parse("div#js-initial-watch-data").unwrap();
+        let selector = Selector::parse("meta[name=\"server-response\"]").unwrap();
         if let Some(selected) = html.select(&selector).next() {
             let elem = &selected.value();
-            let api_data = elem.attr("data-api-data").unwrap();
+            let api_data = elem.attr("content").unwrap();
             if crate::is_debug() {
                 dbg!(&api_data);
             }
 
-            Ok(Some(serde_json::from_str(api_data).unwrap()))
+            let api_data: serde_json::Value = serde_json::from_str(api_data).unwrap();
+            let api_data = &api_data["data"]["response"];
+
+            Ok(Some(serde_json::from_value(api_data.clone()).unwrap()))
         } else {
             Ok(None)
         }
     }
 
-    pub async fn get_video_api_data_temp(
-        self: &NicoVideo,
-        video_id: &str,
-    ) -> Result<Option<ApiData>, Error> {
-        let video_url = format!(
-            "https://www.nicovideo.jp/api/watch/tmp/{}?_frontendId=6&_frontendVersion=0.0.0",
-            video_id
-        );
-        let raw: serde_json::Value = self.get(video_url.as_str()).await?.json().await?;
-        let status = &raw["meta"]["status"];
-        if status == 200 {
-            let api_data = raw["data"].clone();
-            if crate::is_debug() {
-                dbg!(&api_data);
-            }
+    pub async fn get_comments(&self, api_data: &ApiData) -> Result<serde_json::Value, Error> {
+        let comment = api_data.comment.as_ref().unwrap();
+        let nv_comment = comment["nvComment"].clone();
 
-            Ok(Some(serde_json::from_value(api_data)?))
-        } else {
-            Ok(None)
+        let req = json! {{
+            "additionals": {},
+            "params": {
+                "targets": nv_comment["params"]["targets"],
+                "language": "ja-jp"
+            },
+            "threadKey": nv_comment["threadKey"],
+        }};
+        let req_json_str = serde_json::to_string(&req).unwrap();
+        let url = format!("{}/v1/threads", nv_comment["server"].as_str().unwrap());
+
+        if crate::is_debug() {
+            println!("[+] Comment Server: {}", url);
         }
+
+        let res = self
+            .client
+            .post(url)
+            .header(REFERER, "https://www.nicovideo.jp")
+            .header(ORIGIN, "https://www.nicovideo.jp")
+            .header(USER_AGENT, UA_STRING)
+            .header(CONTENT_TYPE, "application/json")
+            .header("X-Frontend-Id", "6")
+            .header("X-Frontend-Version", "0")
+            .body(req_json_str)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        let res: serde_json::Value = serde_json::from_str(&res)?;
+        Ok(res)
     }
 
     pub async fn update_hls_cookie(
@@ -146,57 +168,6 @@ impl NicoVideo {
             .text()
             .await?;
         let res: serde_json::Value = serde_json::from_str(&res)?;
-        Ok(res["data"]["contentUrl"].as_str().unwrap().to_string())
-    }
-
-    pub async fn update_hls_cookie_temp(
-        &self,
-        api_data: &ApiData,
-        video_id: &str,
-    ) -> Result<String, Error> {
-        let domand = &api_data.media.domand;
-        let action_track_id = &api_data.client.watchTrackId;
-        let url = format!(
-            "https://nvapi.nicovideo.jp/v1/tmp/watch/{}/access-rights/hls?actionTrackId={}&_frontendId=6&_frontendVersion=0.0.0",
-            video_id, action_track_id
-        );
-        let id_video_domand = {
-            let mut videos = Vec::new();
-            videos.extend(&domand.videos);
-            videos.sort_by_key(|x| x.qualityLevel);
-            &videos.iter().filter(|x| x.isAvailable).last().unwrap().id
-        };
-        let id_audio_domand = {
-            let mut audios = Vec::new();
-            audios.extend(&domand.audios);
-            audios.sort_by_key(|x| x.qualityLevel);
-            &audios.iter().filter(|x| x.isAvailable).last().unwrap().id
-        };
-        let req_json = json! {{
-            "outputs": [
-            [id_video_domand, id_audio_domand]
-            ]
-        }};
-        let req_json_str = serde_json::to_string(&req_json).unwrap();
-        let res: serde_json::Value = self
-            .client
-            .post(url)
-            .header(REFERER, "https://www.nicovideo.jp")
-            .header(ORIGIN, "https://www.nicovideo.jp")
-            .header(USER_AGENT, UA_STRING)
-            .header(CONTENT_TYPE, "application/json")
-            .header("X-Request-With", "https://www.nicovideo.jp")
-            .header("X-Access-Right-Key", &domand.accessRightKey)
-            .body(req_json_str)
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        if crate::is_debug() {
-            dbg!(&res);
-        }
-
         Ok(res["data"]["contentUrl"].as_str().unwrap().to_string())
     }
 
