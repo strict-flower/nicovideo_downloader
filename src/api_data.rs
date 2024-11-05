@@ -209,7 +209,7 @@ adstruct! {
     }
 
     SeriesVideos {
-        first: SeriesVideo,
+        first: Option<SeriesVideo>,
         next: Option<SeriesVideo>,
         prev: Option<SeriesVideo>
     }

@@ -76,6 +76,13 @@ impl NicoVideo {
             }
 
             let api_data: serde_json::Value = serde_json::from_str(api_data).unwrap();
+            let status = api_data["meta"]["status"].as_i64().unwrap();
+
+            if status != 200 {
+                println!("Status: {}", status);
+                return Ok(None);
+            }
+
             let api_data = &api_data["data"]["response"];
 
             Ok(Some(serde_json::from_value(api_data.clone()).unwrap()))

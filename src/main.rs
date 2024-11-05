@@ -9,7 +9,6 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process;
-use std::process::Stdio;
 
 mod api_data;
 mod downloader;
@@ -34,6 +33,7 @@ pub enum Error {
     FFmpegError(ffmpeg_cli::Error),
     SerdeJsonError(serde_json::Error),
     DownloadError,
+    LongFileNameError,
 }
 
 impl fmt::Display for Error {
@@ -44,6 +44,7 @@ impl fmt::Display for Error {
             Error::FFmpegError(err) => write!(f, "{}", err),
             Error::SerdeJsonError(err) => write!(f, "{}", err),
             Error::DownloadError => write!(f, "DownloadError"),
+            Error::LongFileNameError => write!(f, "LongFileNameError"),
         }
     }
 }
@@ -97,7 +98,10 @@ async fn main() -> Result<(), Error> {
 }
 
 async fn download_video(nv: &NicoVideo, target: String) -> Result<(), Error> {
-    let api_data: ApiData = nv.get_video_api_data(&target).await?.unwrap();
+    let api_data: ApiData = match nv.get_video_api_data(&target).await? {
+        Some(x) => x,
+        None => return Ok(()),
+    };
     println!("[+] Title: {}", api_data.video.title);
 
     let m3u8_url = nv.update_hls_cookie(&api_data, &target).await?;
@@ -105,7 +109,11 @@ async fn download_video(nv: &NicoVideo, target: String) -> Result<(), Error> {
         println!("master playlist is here: {}", &m3u8_url);
     }
 
-    let outfile = format!("{}.mp4", sanitize_filename::sanitize(&api_data.video.title));
+    let outfile = format!(
+        "{}_{}.mp4",
+        target,
+        sanitize_filename::sanitize(&api_data.video.title)
+    );
     let outfile = Path::new(&outfile);
     if outfile.exists() {
         print!(
@@ -121,7 +129,23 @@ async fn download_video(nv: &NicoVideo, target: String) -> Result<(), Error> {
         }
     }
 
-    println!("Downaloading comments...");
+    let outfile_short = format!("{}.mp4", target);
+    let outfile_short = Path::new(&outfile_short);
+    if outfile_short.exists() {
+        print!(
+            "[?] '{}' is existed. overwrite? [y/N]",
+            outfile_short.to_str().unwrap()
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        line.pop();
+        if line != "y" {
+            return Ok(());
+        }
+    }
+
+    println!("Downloading comments...");
     // write-out comments
     {
         let comments_dir = Path::new("comments");
@@ -146,7 +170,14 @@ async fn download_video(nv: &NicoVideo, target: String) -> Result<(), Error> {
     println!("\n[+] Transcode HLS stream to mp4 video");
     let input_path = &temp_dir.join(master_playlist_filename);
 
-    convert_video(input_path, outfile).await?;
+    match convert_video(input_path, outfile).await {
+        Ok(()) => {}
+        Err(Error::LongFileNameError) => {
+            println!("[-] Filename is too long: Retry with only video id");
+            convert_video(input_path, outfile_short).await?
+        }
+        Err(e) => return Err(e),
+    }
 
     // write-out metadata
     {
@@ -197,13 +228,18 @@ async fn convert_video(input_path: &Path, outfile: &Path) -> Result<(), Error> {
         .await;
 
     println!();
+    let output = ffmpeg.process.wait_with_output()?;
+    let status = output.status;
     if is_debug() {
-        let output = ffmpeg.process.wait_with_output()?;
         println!(
             "{}\nstderr:\n{}",
-            output.status,
+            status,
             std::str::from_utf8(&output.stderr).unwrap()
         );
+    }
+
+    if let Some(220) = status.code() {
+        return Err(Error::LongFileNameError);
     }
 
     println!("Done");
