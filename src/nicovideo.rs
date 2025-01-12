@@ -119,6 +119,7 @@ impl NicoVideo {
             .header(CONTENT_TYPE, "application/json")
             .header("X-Frontend-Id", "6")
             .header("X-Frontend-Version", "0")
+            .header("X-NicoNico-Language", "ja-jp")
             .body(req_json_str)
             .send()
             .await?
@@ -127,6 +128,98 @@ impl NicoVideo {
 
         let res: serde_json::Value = serde_json::from_str(&res)?;
         Ok(res)
+    }
+
+    pub async fn get_series(
+        self: &NicoVideo,
+        series_id: &str,
+    ) -> Result<crate::series::Series, Error> {
+        let mut page = 1;
+        let mut items = vec![];
+        loop {
+            let json = self.get_series_impl(series_id, page).await?;
+            let total = json["data"]["totalCount"].as_i64().unwrap();
+            json["data"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .for_each(|x| items.push(x["meta"]["id"].as_str().unwrap().to_string()));
+            if total < page * 100 {
+                return Ok(crate::series::Series {
+                    id: str::parse(series_id).unwrap(),
+                    owner: str::parse(json["data"]["detail"]["owner"]["id"].as_str().unwrap())
+                        .unwrap(),
+                    owner_name: json["data"]["detail"]["owner"]["user"]["nickname"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    title: json["data"]["detail"]["title"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    description: json["data"]["detail"]["description"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    decorated_description_html: json["data"]["detail"]["decoratedDescriptionHtml"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    thumbnail_url: json["data"]["detail"]["thumbnailUrl"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    is_listed: json["data"]["detail"]["isListed"].as_bool().unwrap(),
+                    created_at: json["data"]["detail"]["createdAt"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    updated_at: json["data"]["detail"]["updatedAt"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    items,
+                });
+            }
+            page += 1;
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    }
+
+    async fn get_series_impl(
+        &self,
+        series_id: &str,
+        page: i64,
+    ) -> Result<serde_json::Value, Error> {
+        let api_url = format!(
+            "https://nvapi.nicovideo.jp/v2/series/{}?page={}&sensitiveContents=mask&pageSize=100",
+            series_id, page
+        );
+        let res = self
+            .client
+            .get(&api_url)
+            .header(REFERER, "https://www.nicovideo.jp")
+            .header(ORIGIN, "https://www.nicovideo.jp")
+            .header(USER_AGENT, UA_STRING)
+            .header(CONTENT_TYPE, "application/json")
+            .header("X-Frontend-Id", "6")
+            .header("X-Frontend-Version", "0")
+            .header("X-NicoNico-Language", "ja-jp")
+            .send()
+            .await?
+            .text()
+            .await?;
+        let json: serde_json::Value = serde_json::from_str(res.as_str())?;
+        if crate::is_debug() {
+            dbg!(api_url);
+            dbg!(&json);
+        }
+        let status_code = json["meta"]["status"].as_i64().unwrap_or(-1);
+        if status_code != 200 {
+            println!("Error: Series API didn't return correctly result (expected: 200, actual: {status_code})");
+            return Err(Error::DownloadError);
+        }
+        Ok(json)
     }
 
     pub async fn update_hls_cookie(
@@ -169,6 +262,7 @@ impl NicoVideo {
             .header("X-Access-Right-Key", &domand.accessRightKey)
             .header("X-Frontend-Id", "6")
             .header("X-Frontend-Version", "0")
+            .header("X-NicoNico-Language", "ja-jp")
             .body(req_json_str)
             .send()
             .await?

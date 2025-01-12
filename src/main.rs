@@ -13,6 +13,7 @@ use std::process;
 mod api_data;
 mod downloader;
 mod nicovideo;
+mod series;
 
 pub const UA_STRING: &str = "Mozilla/5.0 (Windows NT 10.0; rv:126.0) Gecko/20100101 Firefox/126.0";
 
@@ -85,6 +86,10 @@ async fn main() -> Result<(), Error> {
     println!("[+] Login OK");
 
     for target in args {
+        if target.starts_with("series/") {
+            download_series(&nv, target.strip_prefix("series/").unwrap()).await?;
+            continue;
+        }
         if !target.starts_with("sm") && !target.starts_with("nm") {
             println!("Video ID must start by 'sm' or 'nm'");
             continue;
@@ -93,6 +98,24 @@ async fn main() -> Result<(), Error> {
         println!("\n[+] {}", target);
         // download_video_temp(&nv, target).await?;
         download_video(&nv, target).await?;
+    }
+    Ok(())
+}
+
+async fn download_series(nv: &NicoVideo, series_id: &str) -> Result<(), Error> {
+    let series = nv.get_series(series_id).await?;
+    {
+        let series_dir = Path::new("series");
+        if !series_dir.exists() {
+            fs::create_dir(series_dir)?;
+        }
+
+        let mut sf = fs::File::create(format!("series/{}.json", series_id))?;
+        sf.write_all(serde_json::to_string_pretty(&series)?.as_bytes())?;
+    }
+    for video_id in series.items {
+        download_video(nv, video_id).await?;
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
     Ok(())
 }
