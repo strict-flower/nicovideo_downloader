@@ -13,6 +13,7 @@ use std::process;
 mod api_data;
 mod downloader;
 mod nicovideo;
+mod seiga;
 mod series;
 
 pub const UA_STRING: &str = "Mozilla/5.0 (Windows NT 10.0; rv:126.0) Gecko/20100101 Firefox/126.0";
@@ -90,14 +91,192 @@ async fn main() -> Result<(), Error> {
             download_series(&nv, target.strip_prefix("series/").unwrap()).await?;
             continue;
         }
+        if target.starts_with("clip/") {
+            download_seiga_clips(&nv, target.strip_prefix("clip/").unwrap()).await?;
+            continue;
+        }
+        if target.starts_with("seiga-tag#") {
+            download_seiga_tags(&nv, target.strip_prefix("seiga-tag#").unwrap()).await?;
+            continue;
+        }
+        if target.starts_with("im") {
+            download_seiga(&nv, &target).await?;
+            continue;
+        }
         if !target.starts_with("sm") && !target.starts_with("nm") {
             println!("Video ID must start by 'sm' or 'nm'");
             continue;
         }
 
         println!("\n[+] {}", target);
-        // download_video_temp(&nv, target).await?;
         download_video(&nv, target).await?;
+    }
+    Ok(())
+}
+
+async fn download_seiga(nv: &NicoVideo, seiga_id: &str) -> Result<(), Error> {
+    let sd = nv.get_seiga_downloader();
+    let seiga_dir = Path::new("seiga");
+    if !seiga_dir.exists() {
+        fs::create_dir(seiga_dir)?;
+    }
+
+    let metadata_dir = seiga_dir.join("metadata");
+    if !metadata_dir.exists() {
+        fs::create_dir(metadata_dir.clone())?;
+    }
+
+    let outfile = seiga_dir.join(format!("{}.png", seiga_id,));
+    if outfile.exists() {
+        print!(
+            "[?] '{}' is existed. overwrite? [y/N]",
+            outfile.to_str().unwrap()
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        line.pop();
+        if line != "y" {
+            return Ok(());
+        }
+    }
+
+    match sd.download_seiga(seiga_id).await? {
+        Some((metadata, v)) => {
+            {
+                let metafile = metadata_dir.join(format!("{seiga_id}.json"));
+                let mut sf = fs::File::create(metafile)?;
+                sf.write_all(serde_json::to_string_pretty(&metadata)?.as_bytes())?;
+            }
+            let mut sf = fs::File::create(outfile)?;
+            sf.write_all(&v)?;
+        }
+        None => {
+            println!("[-] {seiga_id} is not found, skipping. ");
+        }
+    }
+    Ok(())
+}
+
+async fn download_seiga_tags(nv: &NicoVideo, tag: &str) -> Result<(), Error> {
+    let sd = nv.get_seiga_downloader();
+    let seiga_dir = Path::new("seiga");
+    if !seiga_dir.exists() {
+        fs::create_dir(seiga_dir)?;
+    }
+
+    let tag_dir = seiga_dir.join(format!("tag_{}", sanitize_filename::sanitize(tag)));
+    if !tag_dir.exists() {
+        fs::create_dir(tag_dir.clone())?;
+    }
+
+    let metadata_dir = seiga_dir.join("metadata");
+    if !metadata_dir.exists() {
+        fs::create_dir(metadata_dir.clone())?;
+    }
+
+    let mut page: i32 = match env::var("NV_SEIGA_PAGE") {
+        Ok(x) => x.parse().unwrap(),
+        Err(_) => 1,
+    };
+
+    loop {
+        println!("[+] Page = {page}");
+        let (images, next_page) = sd.get_tags(tag, page).await?;
+        for im in images {
+            let outfile = tag_dir.join(format!("{}.png", im,));
+            if outfile.exists() {
+                print!(
+                    "[?] '{}' is existed. overwrite? [y/N]",
+                    outfile.to_str().unwrap()
+                );
+                std::io::stdout().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line.pop();
+                if line != "y" {
+                    continue;
+                }
+            }
+            match sd.download_seiga(&im).await? {
+                Some((metadata, v)) => {
+                    {
+                        let metafile = metadata_dir.join(format!("{im}.json"));
+                        let mut sf = fs::File::create(metafile)?;
+                        sf.write_all(serde_json::to_string_pretty(&metadata)?.as_bytes())?;
+                    }
+                    let mut sf = fs::File::create(outfile)?;
+                    sf.write_all(&v)?;
+                }
+                None => {
+                    println!("[-] {im} is not found, skipping. ");
+                }
+            }
+        }
+        if next_page.is_none() {
+            break;
+        }
+        page = next_page.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+    Ok(())
+}
+
+async fn download_seiga_clips(nv: &NicoVideo, clip_id: &str) -> Result<(), Error> {
+    let sd = nv.get_seiga_downloader();
+    let seiga_dir = Path::new("seiga");
+    if !seiga_dir.exists() {
+        fs::create_dir(seiga_dir)?;
+    }
+
+    let clip_dir = seiga_dir.join(format!("clip_{clip_id}"));
+    if !clip_dir.exists() {
+        fs::create_dir(clip_dir.clone())?;
+    }
+
+    let metadata_dir = seiga_dir.join("metadata");
+    if !metadata_dir.exists() {
+        fs::create_dir(metadata_dir.clone())?;
+    }
+
+    let mut page = 1;
+    loop {
+        let (images, next_page) = sd.get_clips(clip_id, page).await?;
+        for im in images {
+            let outfile = clip_dir.join(format!("{}.png", im,));
+            if outfile.exists() {
+                print!(
+                    "[?] '{}' is existed. overwrite? [y/N]",
+                    outfile.to_str().unwrap()
+                );
+                std::io::stdout().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line.pop();
+                if line != "y" {
+                    continue;
+                }
+            }
+            match sd.download_seiga(&im).await? {
+                Some((metadata, v)) => {
+                    {
+                        let metafile = metadata_dir.join(format!("{im}.json"));
+                        let mut sf = fs::File::create(metafile)?;
+                        sf.write_all(serde_json::to_string_pretty(&metadata)?.as_bytes())?;
+                    }
+                    let mut sf = fs::File::create(outfile)?;
+                    sf.write_all(&v)?;
+                }
+                None => {
+                    println!("[-] {im} is not found, skipping. ");
+                }
+            }
+        }
+        if next_page.is_none() {
+            break;
+        }
+        page = next_page.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
     Ok(())
 }

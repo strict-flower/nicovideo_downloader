@@ -1,4 +1,5 @@
 use crate::api_data::ApiData;
+use crate::seiga::SeigaDownloader;
 use crate::{Error, NicoVideoDownloader, UA_STRING};
 use reqwest::header::{CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT};
 use reqwest::{Client, Response};
@@ -44,7 +45,7 @@ impl NicoVideo {
         })
     }
 
-    pub async fn login(self: &NicoVideo, username: &str, password: &str) -> Result<(), Error> {
+    pub async fn login(&self, username: &str, password: &str) -> Result<(), Error> {
         let form_data = vec![("mail_tel", username), ("password", password)];
         self.post(
             "https://account.nicovideo.jp/login/redirector?next_url=%2F",
@@ -55,15 +56,12 @@ impl NicoVideo {
         Ok(())
     }
 
-    pub async fn is_login(self: &NicoVideo) -> Result<bool, Error> {
+    pub async fn is_login(&self) -> Result<bool, Error> {
         let raw_html = self.get_raw_html("https://www.nicovideo.jp/my").await?;
         Ok(!raw_html.contains("\"login_status\":\"not_login\""))
     }
 
-    pub async fn get_video_api_data(
-        self: &NicoVideo,
-        video_id: &str,
-    ) -> Result<Option<ApiData>, Error> {
+    pub async fn get_video_api_data(&self, video_id: &str) -> Result<Option<ApiData>, Error> {
         let video_url = format!("https://www.nicovideo.jp/watch/{}", video_id);
         let raw_html = self.get_raw_html(video_url.as_str()).await?;
         let html = Html::parse_fragment(raw_html.as_str());
@@ -130,10 +128,7 @@ impl NicoVideo {
         Ok(res)
     }
 
-    pub async fn get_series(
-        self: &NicoVideo,
-        series_id: &str,
-    ) -> Result<crate::series::Series, Error> {
+    pub async fn get_series(&self, series_id: &str) -> Result<crate::series::Series, Error> {
         let mut page = 1;
         let mut items = vec![];
         loop {
@@ -201,7 +196,6 @@ impl NicoVideo {
             .header(REFERER, "https://www.nicovideo.jp")
             .header(ORIGIN, "https://www.nicovideo.jp")
             .header(USER_AGENT, UA_STRING)
-            .header(CONTENT_TYPE, "application/json")
             .header("X-Frontend-Id", "6")
             .header("X-Frontend-Version", "0")
             .header("X-NicoNico-Language", "ja-jp")
@@ -272,14 +266,14 @@ impl NicoVideo {
         Ok(res["data"]["contentUrl"].as_str().unwrap().to_string())
     }
 
-    fn save_cookie(self: &NicoVideo) -> Result<(), io::Error> {
+    fn save_cookie(&self) -> Result<(), io::Error> {
         let mut writer = File::create(self.cookies_path.as_path()).map(BufWriter::new)?;
         let store = self.cookies.lock().unwrap();
         store.save_json(&mut writer).unwrap();
         Ok(())
     }
 
-    async fn get(self: &NicoVideo, url: &str) -> Result<Response, Error> {
+    async fn get(&self, url: &str) -> Result<Response, Error> {
         let res = self
             .client
             .get(url)
@@ -291,16 +285,12 @@ impl NicoVideo {
         Ok(res)
     }
 
-    async fn get_raw_html(self: &NicoVideo, url: &str) -> Result<String, Error> {
+    async fn get_raw_html(&self, url: &str) -> Result<String, Error> {
         let raw_html = self.get(url).await?.text().await?;
         Ok(raw_html)
     }
 
-    async fn post(
-        self: &NicoVideo,
-        url: &str,
-        data: &Vec<(&str, &str)>,
-    ) -> Result<Response, Error> {
+    async fn post(&self, url: &str, data: &Vec<(&str, &str)>) -> Result<Response, Error> {
         let ret = self
             .client
             .post(url)
@@ -313,5 +303,9 @@ impl NicoVideo {
 
     pub fn get_downloader(&self) -> NicoVideoDownloader {
         NicoVideoDownloader::new(self.client.clone())
+    }
+
+    pub fn get_seiga_downloader(&self) -> SeigaDownloader {
+        SeigaDownloader::new(self.client.clone(), self.cookies.clone())
     }
 }
