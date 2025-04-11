@@ -2,7 +2,7 @@ use crate::api_data::ApiData;
 use crate::downloader::NicoVideoDownloader;
 use crate::nicovideo::NicoVideo;
 use ffmpeg_cli::{FfmpegBuilder, Parameter as FFParam};
-use futures_util::{future::ready, StreamExt};
+use futures_util::{StreamExt, future::ready};
 use std::env;
 use std::fmt;
 use std::fs;
@@ -16,7 +16,8 @@ mod nicovideo;
 mod seiga;
 mod series;
 
-pub const UA_STRING: &str = "Mozilla/5.0 (Windows NT 10.0; rv:126.0) Gecko/20100101 Firefox/126.0";
+pub const UA_STRING: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0";
 
 macro_rules! error_impl {
     ($name:ident, $t:ty) => {
@@ -66,6 +67,8 @@ pub fn is_debug() -> bool {
 async fn main() -> Result<(), Error> {
     let username = env::var("NV_USERNAME").unwrap_or("dummy".to_owned());
     let password = env::var("NV_PASSWORD").unwrap_or("dummy".to_owned());
+    let totp_secret = env::var("NV_TOTP_SECRET").ok();
+    let totp_secret = totp_secret.as_deref();
     let cookies_path = Path::new("cookies.json");
     let nv = NicoVideo::new(cookies_path).unwrap();
     let mut args = env::args();
@@ -78,7 +81,7 @@ async fn main() -> Result<(), Error> {
 
     if !nv.is_login().await? {
         println!("[+] Need login");
-        nv.login(&username, &password).await?;
+        nv.login(&username, &password, totp_secret).await?;
         if !nv.is_login().await? {
             println!("[-] Login failed");
             process::exit(1);
@@ -409,7 +412,8 @@ async fn convert_video(input_path: &Path, outfile: &Path) -> Result<(), Error> {
         .option(FFParam::KeyValue("protocol_whitelist", "file"))
         .input(ffmpeg_cli::File::new(input_path.to_str().unwrap()))
         .output(
-            ffmpeg_cli::File::new(outfile.to_str().unwrap()).option(FFParam::KeyValue("g", "15")), // .option(FFParam::KeyValue("tune", "zerolatency")),
+            ffmpeg_cli::File::new(outfile.to_str().unwrap()).option(FFParam::KeyValue("g", "15")),
+            // .option(FFParam::KeyValue("b:v", "16m")),
         );
 
     let ffmpeg = builder.run().await?;

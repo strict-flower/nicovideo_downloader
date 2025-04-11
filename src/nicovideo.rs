@@ -45,13 +45,64 @@ impl NicoVideo {
         })
     }
 
-    pub async fn login(&self, username: &str, password: &str) -> Result<(), Error> {
+    pub async fn login(
+        &self,
+        username: &str,
+        password: &str,
+        totp_secret: Option<&str>,
+    ) -> Result<(), Error> {
         let form_data = vec![("mail_tel", username), ("password", password)];
-        self.post(
-            "https://account.nicovideo.jp/login/redirector?next_url=%2F",
-            &form_data,
-        )
-        .await?;
+        let res = self
+            .client
+            .post("https://account.nicovideo.jp/login/redirector?site=niconico&next_url=%2F")
+            .header(USER_AGENT, UA_STRING)
+            .header(REFERER, "https://account.nicovideo.jp/login?site=niconico")
+            .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.7,en;q=0.3") // for simple
+            .form(&form_data)
+            .send()
+            .await?;
+        let raw_html = &res.text().await?;
+        if raw_html.contains("2-Step Verification") {
+            // MFA flow
+            let secret = base32::decode(
+                base32::Alphabet::Rfc4648 { padding: true },
+                totp_secret.expect("Neeed to specify totp_secret"),
+            )
+            .expect("Invalid base32 string: totp secret");
+            let current = chrono::Local::now().timestamp() as u64;
+            let totp = compute_totp(&secret, current, 30, 0, 6);
+            let (next_url, device_name) = {
+                let html = Html::parse_fragment(raw_html);
+                let form_selector = Selector::parse("form").unwrap();
+                let form_elem = html.select(&form_selector).next().unwrap().value();
+                let name_selector = Selector::parse("input#deviceNameInput").unwrap();
+                let name_elem = html.select(&name_selector).next().unwrap().value();
+                (
+                    form_elem.attr("action").unwrap().to_string(),
+                    name_elem.attr("value").unwrap().to_string(),
+                )
+            };
+            // totp and device_name are String type, so it causes type incosistency between (&str, &'static str) and (&str, &String)
+            let totp: &str = &totp;
+            let device_name: &str = &device_name;
+            let form_data = vec![
+                ("otp", totp),
+                ("device_name", device_name),
+                ("is_mfa_trusted_device", "true"),
+                ("loginBtn", "Login"),
+            ];
+            let res = self
+                .post(
+                    &format!("https://account.nicovideo.jp{next_url}"),
+                    &form_data,
+                )
+                .await?
+                .text()
+                .await?;
+            if crate::is_debug() {
+                dbg!(res);
+            }
+        }
         self.save_cookie().unwrap();
         Ok(())
     }
@@ -210,7 +261,9 @@ impl NicoVideo {
         }
         let status_code = json["meta"]["status"].as_i64().unwrap_or(-1);
         if status_code != 200 {
-            println!("Error: Series API didn't return correctly result (expected: 200, actual: {status_code})");
+            println!(
+                "Error: Series API didn't return correctly result (expected: 200, actual: {status_code})"
+            );
             return Err(Error::DownloadError);
         }
         Ok(json)
@@ -231,13 +284,23 @@ impl NicoVideo {
             let mut videos = Vec::new();
             videos.extend(&domand.videos);
             videos.sort_by_key(|x| x.qualityLevel);
-            &videos.iter().filter(|x| x.isAvailable).last().unwrap().id
+            &videos
+                .iter()
+                .filter(|x| x.isAvailable)
+                .next_back()
+                .unwrap()
+                .id
         };
         let id_audio_domand = {
             let mut audios = Vec::new();
             audios.extend(&domand.audios);
             audios.sort_by_key(|x| x.qualityLevel);
-            &audios.iter().filter(|x| x.isAvailable).last().unwrap().id
+            &audios
+                .iter()
+                .filter(|x| x.isAvailable)
+                .next_back()
+                .unwrap()
+                .id
         };
         let req_json = json! {{
             "outputs": [
@@ -307,5 +370,49 @@ impl NicoVideo {
 
     pub fn get_seiga_downloader(&self) -> SeigaDownloader {
         SeigaDownloader::new(self.client.clone(), self.cookies.clone())
+    }
+}
+
+fn compute_totp(secret: &[u8], time: u64, period: u64, t0: u64, digits: usize) -> String {
+    use hmac::{Hmac, Mac};
+    use sha1::Sha1;
+
+    let t = (time - t0) / period;
+    let c = t.to_be_bytes();
+    let mut hmac = Hmac::<Sha1>::new_from_slice(secret).unwrap();
+    hmac.update(&c);
+    let hs = hmac.finalize();
+    let hs = hs.into_bytes();
+    let offset = (*hs.iter().last().unwrap() as usize) & 0xf;
+    let hs_sliced: [u8; 4] = (&hs[offset..(offset + 4)]).try_into().unwrap();
+    let s = u32::from_be_bytes(hs_sliced) & 0x7FFFFFFF;
+    let base = 10u32;
+    let s = s % (base.pow(digits as u32));
+    format!("{:0>digits$}", s)
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_totp() {
+        use crate::nicovideo::compute_totp;
+
+        let k = b"12345678901234567890";
+        let time_list: [u64; 6] = [
+            59,
+            1111111109,
+            1111111111,
+            1234567890,
+            2000000000,
+            20000000000,
+        ];
+        let expected: [&str; 6] = [
+            "94287082", "07081804", "14050471", "89005924", "69279037", "65353130",
+        ];
+        let period = 30;
+        let t0 = 0;
+        for (t, e) in time_list.iter().zip(expected) {
+            assert_eq!(&compute_totp(k, *t, period, t0, 8), e);
+        }
     }
 }

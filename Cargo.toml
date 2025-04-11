@@ -7,11 +7,14 @@ edition = "2021"
 
 [dependencies]
 aes = "0.8.4"
+base32 = "0.5.1"
 blockingqueue = "0.1.1"
 cbc = { version = "0.1.2", features = ["alloc", "block-padding", "std"] }
+chrono = "0.4.40"
 ffmpeg-cli = "0.1.0"
 futures-util = "0.3.28"
 hex = "0.4.3"
+hmac = "0.12.1"
 m3u8-rs = "5.0.4"
 reqwest = {version = "0.11.18", features = ["cookies", "json", "stream"] }
 reqwest_cookie_store = "0.6.0"
@@ -19,5 +22,6 @@ sanitize-filename = "0.4.0"
 scraper = "0.17.1"
 serde = { version = "1.0.171", features = ["derive"] }
 serde_json = "1.0.103"
+sha1 = "0.10.6"
 tokio = { version = "1.29.1", features = ["full"] }
 url = "2.5.4"
