@@ -1,12 +1,12 @@
 use crate::{Error, UA_STRING};
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use futures_util::StreamExt;
 use reqwest::header::{ORIGIN, REFERER, USER_AGENT};
 use reqwest::{Client, Response};
 use std::io::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 pub struct NicoVideoDownloader {
     client: Arc<Client>,
@@ -16,7 +16,7 @@ fn url_to_filename<'a>(url: &'a str, extension: &'a str) -> &'a str {
     let path = url.split_once('?').unwrap().0;
     path.split('/')
         .filter(|x| x.ends_with(&extension))
-        .last()
+        .next_back()
         .unwrap()
 }
 

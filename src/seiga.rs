@@ -217,7 +217,7 @@ impl SeigaDownloader {
         let url = format!("https://seiga.nicovideo.jp/image/source/{image_id}");
         let image_url = loop {
             let html = get_wrapper(url.clone(), "seiga_source_page").await?;
-            break if html[..6].as_bytes() == [0xef, 0xbf, 0xbd, 0x50, 0x4e, 0x47] {
+            break if html.as_bytes()[..6] == [0xef, 0xbf, 0xbd, 0x50, 0x4e, 0x47] {
                 // oekakiko (new)
                 // \x89 => \xef\xbf\xbd (U+FFFD REPLACEMENT CHARACTER)
                 url
@@ -242,7 +242,7 @@ impl SeigaDownloader {
                         println!("Server returned an invalid html, wait and retry...");
                         if crate::is_debug() {
                             dbg!(image_id);
-                            dbg!(html[..6].as_bytes());
+                            dbg!(&html.as_bytes()[..6]);
                             // println!("html = {}", html);
                         }
                         Self::sleep_sec(10).await;
